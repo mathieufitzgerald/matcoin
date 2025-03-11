@@ -2,30 +2,24 @@
 """
 crypto_utils.py
 
-Cryptographic and utility functions: double-sha256, ripemd160, base58, etc.
+Basic cryptographic helpers: double_sha256, hash160, base58 with check, etc.
 """
 
 import hashlib
-import base58  # pip install base58
-import ecdsa
+import base58
 
 def double_sha256(b: bytes) -> bytes:
     return hashlib.sha256(hashlib.sha256(b).digest()).digest()
 
 def hash160(b: bytes) -> bytes:
-    """RIPEMD160(SHA256(b))"""
     sha = hashlib.sha256(b).digest()
     rip = hashlib.new('ripemd160')
     rip.update(sha)
     return rip.digest()
 
-def sha256(b: bytes) -> bytes:
-    return hashlib.sha256(b).digest()
-
 def base58_check_encode(prefix: bytes, payload: bytes) -> str:
     """
-    Convert prefix + payload to Base58Check.
-    prefix might be 1 byte (like 0x00 for mainnet pubkey-hash in real Bitcoin).
+    Returns base58-check of prefix+payload+checksum
     """
     data = prefix + payload
     checksum = double_sha256(data)[:4]
@@ -33,10 +27,10 @@ def base58_check_encode(prefix: bytes, payload: bytes) -> str:
 
 def base58_check_decode(s: str) -> bytes:
     """
-    Decode Base58Check string to raw bytes. Return prefix + payload.
+    Decodes base58-check string into raw bytes: prefix+payload
     """
-    full = base58.b58decode(s)
-    data, checksum = full[:-4], full[-4:]
-    if double_sha256(data)[:4] != checksum:
+    raw = base58.b58decode(s)
+    data, csum = raw[:-4], raw[-4:]
+    if double_sha256(data)[:4] != csum:
         raise ValueError("Invalid base58 checksum")
     return data
