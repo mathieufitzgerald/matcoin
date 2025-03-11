@@ -2,8 +2,8 @@
 """
 chain_state.py
 
-Contains the Chain class that stores blocks, manages UTXOs, enforces consensus
-(rudimentary difficulty, halving, etc.), plus a Mempool class for pending TXs.
+Stores the Chain (blocks, UTXOs) and Mempool. 
+Implements skip-PoW for genesis so it's accepted, plus get_balance for the wallet.
 """
 
 import time
@@ -14,45 +14,58 @@ from dataclasses import dataclass, field
 from blockchain_data import Block, BlockHeader, Transaction, TxInput, TxOutput, merkle_root, validate_transaction
 from config import (
     INITIAL_DIFFICULTY,
-    BLOCK_TARGET_TIME,
-    DIFFICULTY_ADJUST_INTERVAL,
-    HALVING_INTERVAL,
+    GENESIS_COINBASE_SCRIPT,
     INITIAL_BLOCK_REWARD,
+    HALVING_INTERVAL
 )
-from crypto_utils import double_sha256
 logger = logging.getLogger("MattCoin")
 
 @dataclass
-class UTXOEntry:
-    value: int
-    script_pubkey: str
+class Mempool:
+    pool: Dict[str, Transaction] = field(default_factory=dict)
+    size: int = 0
+
+    def add_transaction(self, tx: Transaction):
+        txid = tx.tx_id()
+        if txid in self.pool:
+            return
+        raw_size = len(tx.serialize())
+        self.pool[txid] = tx
+        self.size += raw_size
+
+    def remove_transaction(self, txid: str):
+        if txid in self.pool:
+            raw_size = len(self.pool[txid].serialize())
+            del self.pool[txid]
+            self.size -= raw_size
+
+    def select_transactions_for_block(self, limit=500_000) -> List[Transaction]:
+        selected = []
+        total_size = 0
+        for txid, tx in list(self.pool.items()):
+            s = len(tx.serialize())
+            if total_size + s <= limit:
+                selected.append(tx)
+                total_size += s
+        return selected
 
 class Chain:
-    """
-    Maintains the best chain of blocks, the UTXO set, etc.
-    """
     def __init__(self):
-        # block storage: block_hash -> Block
-        self.blocks = {}
-        # chain tip:
+        self.blocks = {}  # block_hash -> Block
         self.tip = None
-        # chain height:
         self.height = 0
-        # difficulty (bits or target):
         self.current_difficulty = INITIAL_DIFFICULTY
-        # utxo set: (txid, out_idx) -> (value, script_pubkey)
         self.utxo_set: Dict[Tuple[str,int], Tuple[int,str]] = {}
 
-        # create genesis block
         self.init_genesis_block()
 
     def init_genesis_block(self):
-        # create a "dummy" genesis block
-        from config import GENESIS_COINBASE_SCRIPT
+        # Create genesis block
         coinbase_in = TxInput("0"*64, 0, GENESIS_COINBASE_SCRIPT)
         coinbase_out = TxOutput(INITIAL_BLOCK_REWARD, "OP_DUP OP_HASH160 0000000000000000000000000000000000000000 OP_EQUALVERIFY OP_CHECKSIG")
         genesis_tx = Transaction(1, [coinbase_in], [coinbase_out])
         mr = merkle_root([genesis_tx])
+        from config import NETWORK_MAGIC
         hdr = BlockHeader(
             version=1,
             prev_block_hash="0"*64,
@@ -63,20 +76,24 @@ class Chain:
         )
         genesis_block = Block(hdr, [genesis_tx])
 
-        # For "production," you might embed a valid PoW in the genesis block. We'll skip that.
-        accepted = self.add_block(genesis_block)
+        # Accept genesis without PoW
+        accepted = self.add_block(genesis_block, skip_pow=True)
         if accepted:
             logger.info("Genesis block created at height 1.")
         else:
             logger.warning("Genesis block was not accepted?")
 
-    def add_block(self, block: Block) -> bool:
-        # check PoW
-        block_hash = block.block_hash()
-        block_hash_val = int(block_hash, 16)
-        if block_hash_val > self.current_difficulty:
-            logger.warning("Block fails PoW check: %s", block_hash)
-            return False
+    def add_block(self, block: Block, skip_pow=False) -> bool:
+        bhash = block.block_hash()
+        bhval = int(bhash, 16)
+
+        if not skip_pow:
+            # normal block: check PoW
+            if bhval > self.current_difficulty:
+                logger.warning("Block fails PoW check: %s", bhash)
+                return False
+        else:
+            logger.info("Skipping PoW check for genesis block.")
 
         # check merkle root
         calc_mr = merkle_root(block.transactions)
@@ -84,52 +101,49 @@ class Chain:
             logger.warning("Block merkle root mismatch.")
             return False
 
-        # check prev block
+        # check parent
         if block.header.prev_block_hash not in self.blocks and block.header.prev_block_hash != "0"*64:
-            logger.warning("Unknown prev block hash: %s", block.header.prev_block_hash)
+            logger.warning("Unknown prev block hash %s", block.header.prev_block_hash)
             return False
 
-        # validate transactions
+        # validate coinbase + other tx
         if not self.validate_block_txs(block):
             logger.warning("Block transaction validation failed.")
             return False
 
         # store the block
-        self.blocks[block_hash] = block
+        self.blocks[bhash] = block
 
-        # if it builds on tip or if tip is None
+        # if it builds on tip or tip is None
         if (self.tip is None) or (block.header.prev_block_hash == self.tip) or (block.header.prev_block_hash == "0"*64):
-            self.tip = block_hash
+            self.tip = bhash
             self.height += 1
-            # update UTXOs
-            self.update_utxos_with_block(block)
-            # adjust difficulty? (omitted real logic for brevity)
-            # handle halving? ...
-            return True
+            self.update_utxos(block)
         else:
-            # This might be a side chain. Real logic is more complex
-            return True  # we'll accept but not make it active chain
+            # side chain scenario
+            pass
+
+        return True
 
     def validate_block_txs(self, block: Block) -> bool:
         if len(block.transactions) < 1:
             return False
-        # check coinbase
-        coinbase_tx = block.transactions[0]
-        if len(coinbase_tx.tx_in) != 1:
+        coinbase = block.transactions[0]
+        if len(coinbase.tx_in) != 1:
             return False
-        # check that coinbase out <= block reward
+        # block reward
         block_reward = self.block_reward()
-        coinbase_out_val = sum(o.value for o in coinbase_tx.tx_out)
+        coinbase_out_val = sum(o.value for o in coinbase.tx_out)
         if coinbase_out_val > block_reward:
             return False
 
-        # check all other TX
+        # check normal tx
         for tx in block.transactions[1:]:
             if not validate_transaction(tx, self.utxo_set):
                 return False
         return True
 
-    def update_utxos_with_block(self, block: Block):
+    def update_utxos(self, block: Block):
         for tx in block.transactions:
             txid = tx.tx_id()
             # remove spent
@@ -143,19 +157,13 @@ class Chain:
 
     def block_reward(self) -> int:
         halvings = (self.height - 1) // HALVING_INTERVAL
-        reward = INITIAL_BLOCK_REWARD >> halvings
-        if reward < 1:
-            reward = 1
-        return reward
-
-    def get_block_hashes(self) -> List[str]:
-        """Return a list of block hashes in the chain (not necessarily in order)"""
-        return list(self.blocks.keys())
+        r = INITIAL_BLOCK_REWARD >> halvings
+        return r if r > 0 else 1
 
     def get_balance(self, address_hex: str) -> int:
         """
-        Sum all UTXOs that have script_pubkey referencing address_hex
-        E.g. "OP_DUP OP_HASH160 <address_hex> OP_EQUALVERIFY OP_CHECKSIG"
+        Sum all UTXOs that match script containing 'address_hex' after OP_HASH160
+        e.g. OP_DUP OP_HASH160 <address_hex> OP_EQUALVERIFY OP_CHECKSIG
         """
         total = 0
         for (txid, idx), (val, spk) in self.utxo_set.items():
@@ -163,37 +171,3 @@ class Chain:
             if len(parts) == 5 and parts[2] == address_hex:
                 total += val
         return total
-
-class Mempool:
-    """
-    Holds unconfirmed transactions. Provides a method to select transactions for mining, etc.
-    """
-    def __init__(self):
-        self.pool = {}  # txid -> Transaction
-        self.size = 0   # approximate memory usage
-
-    def add_transaction(self, tx: Transaction):
-        txid = tx.tx_id()
-        if txid in self.pool:
-            return
-        raw_size = len(tx.serialize())
-        # In a real node, check fees, priorities, spam, etc.
-        self.pool[txid] = tx
-        self.size += raw_size
-
-    def remove_transaction(self, txid: str):
-        if txid in self.pool:
-            raw_size = len(self.pool[txid].serialize())
-            del self.pool[txid]
-            self.size -= raw_size
-
-    def select_transactions_for_block(self, limit=500_000) -> List[Transaction]:
-        # super naive: pick everything up to the limit
-        selected = []
-        total_size = 0
-        for txid, tx in list(self.pool.items()):
-            s = len(tx.serialize())
-            if total_size + s <= limit:
-                selected.append(tx)
-                total_size += s
-        return selected
