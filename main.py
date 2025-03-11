@@ -2,24 +2,25 @@
 """
 main.py
 
-The main entry point. Usage:
-
+The main entry point for the MattCoin node.
+Usage:
   python main.py <port> [seed_host:seed_port]
 
 Runs a full node:
-- Creates Chain + Mempool
-- Creates Node (p2p_node)
-- Optionally starts a mining thread if you want
+- Creates chain + mempool
+- Launches Node (p2p_node.py)
+- Optionally you can enable a mining thread here or you can run miner.py separately.
 """
 
 import sys
 import time
 import logging
+import threading
 
 from chain_state import Chain, Mempool
 from p2p_node import Node
 from miner import mine_one_block
-import threading
+from config import INITIAL_BLOCK_REWARD
 
 def main():
     logging.basicConfig(
@@ -35,32 +36,24 @@ def main():
     port = int(sys.argv[1])
     seed = None
     if len(sys.argv) > 2:
-        seed_input = sys.argv[2]
-        host_port = seed_input.split(":")
-        seed = (host_port[0], int(host_port[1]))
+        parts = sys.argv[2].split(":")
+        seed = (parts[0], int(parts[1]))
 
-    # build chain + mempool
     chain = Chain()
     mempool = Mempool()
-
-    # create node
     node = Node("0.0.0.0", port, chain, mempool, seed)
 
-    # Optional: start a background miner. Provide your address here:
-    MINING_ADDRESS_HEX = "0000000000000000000000000000000000000000"
-
-    def mining_loop():
-        while not node.stop_event.is_set():
-            mined = mine_one_block(chain, mempool, MINING_ADDRESS_HEX, node)
-            if not mined:
-                # no block found or we gave up
-                time.sleep(2)
-            else:
-                # block found
-                time.sleep(10)
-
-    # Uncomment to enable mining:
-    # threading.Thread(target=mining_loop, daemon=True).start()
+    # Optional: you can do an internal mining loop:
+    # EXAMPLE: We mine to a dummy address:
+    # MINING_HASH_HEX = "0000000000000000000000000000000000000000"
+    # def mining_thread():
+    #     while not node.stop_event.is_set():
+    #         mined = mine_one_block(chain, mempool, MINING_HASH_HEX, node)
+    #         if mined:
+    #             time.sleep(5)
+    #         else:
+    #             time.sleep(2)
+    # threading.Thread(target=mining_thread, daemon=True).start()
 
     try:
         while True:
