@@ -2,8 +2,8 @@
 """
 p2p_node.py
 
-Implements the Node class, which manages peer connections, message handling,
-gossiping blocks & transactions, querying mempool, etc.
+Implements the Node class, managing peer connections, message handling,
+block & transaction gossip, plus a "get_balance" request handler.
 """
 
 import sys
@@ -17,9 +17,8 @@ from typing import Optional
 from blockchain_data import Block, Transaction
 from chain_state import Chain, Mempool
 from constants import (
-    MSG_VERSION, MSG_VERACK, MSG_GETPEERS, MSG_PEERS,
-    MSG_INV, MSG_GETDATA, MSG_BLOCK, MSG_TX, MSG_PING, MSG_PONG,
-    INVENTORY_MSG_BLOCK, INVENTORY_MSG_TX,
+    MSG_VERSION, MSG_VERACK, MSG_TX, MSG_BLOCK,
+    # You might have other constants like MSG_GETBALANCE, etc.
 )
 from config import (
     NETWORK_MAGIC,
@@ -44,19 +43,23 @@ def deserialize_msg(sock) -> Optional[dict]:
     Read a single message from 'sock'. Return the dict or None if error.
     """
     try:
+        # 1) read the magic
         header = sock.recv(len(NETWORK_MAGIC))
         if header != NETWORK_MAGIC:
             return None
+        # 2) read the length
         length_bytes = sock.recv(4)
         if len(length_bytes) < 4:
             return None
         length = int.from_bytes(length_bytes, 'big')
+        # 3) read the payload
         data = b''
         while len(data) < length:
             chunk = sock.recv(length - len(data))
             if not chunk:
                 return None
             data += chunk
+        # 4) parse JSON
         return json.loads(data.decode('utf-8'))
     except:
         return None
@@ -94,7 +97,7 @@ class Node:
             r, _, _ = select.select([self.sock], [], [], 1)
             if self.sock in r:
                 conn, addr = self.sock.accept()
-                threading.Thread(target=self.handle_client, args=(conn,addr), daemon=True).start()
+                threading.Thread(target=self.handle_client, args=(conn, addr), daemon=True).start()
 
     def handle_client(self, conn, addr):
         while not self.stop_event.is_set():
@@ -110,7 +113,7 @@ class Node:
             for peer in list(self.peers):
                 host, port = peer
                 try:
-                    # say hello
+                    # say hello (version handshake)
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     s.settimeout(3)
                     s.connect((host, port))
@@ -127,9 +130,8 @@ class Node:
             time.sleep(30)
 
     def peer_gossip_loop(self):
-        # gossip mempool or blocks to peers, etc.
+        # gossip mempool or blocks to peers, etc. (Not implemented here)
         while not self.stop_event.is_set():
-            # For demonstration, do nothing or broadcast new TX/blocks if we had them
             time.sleep(15)
 
     def send_message(self, conn, obj: dict):
@@ -137,7 +139,7 @@ class Node:
         conn.sendall(data)
 
     def broadcast(self, obj: dict):
-        for (host,port) in list(self.peers):
+        for (host, port) in list(self.peers):
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.settimeout(3)
@@ -149,54 +151,55 @@ class Node:
 
     def handle_message(self, msg: dict, conn, addr):
         mtype = msg.get("type")
+        logger.debug("handle_message: got type=%s from %s", mtype, addr)
+
         if mtype == MSG_VERSION:
-            # peer handshake
+            # handshake
             their_port = msg.get("port", None)
             if their_port is not None:
                 self.peers.add((addr[0], their_port))
+            # respond with VERACK
             verack_msg = {"type": MSG_VERACK}
             self.send_message(conn, verack_msg)
 
-        elif mtype == MSG_VERACK:
-            # no action needed
-            pass
-
-        elif mtype == MSG_TX:
-            tx_data = msg.get("data")
-            # We need to convert it to a Transaction object. We'll assume it's a dictionary.
-            # Omitted here for brevity - see block_from_json or tx_from_json in prior code.
-            # Validate & add to mempool.
-            # ...
-            pass
-
-        elif mtype == MSG_BLOCK:
-            block_data = msg.get("data")
-            # Convert to Block object, chain.add_block(...).
-            # If accepted, broadcast to peers.
-            # ...
-            pass
-
         elif mtype == "get_balance":
+            # The GUI wallet's message
             address = msg.get("address")
-            bal = self.chain.get_balance(address)
-            height = self.chain.height
+            logger.debug("Received get_balance for address=%s", address)
+            # 1) fetch balance from chain's UTXO set
+            bal = self.chain.get_balance(address)  # chain_state.py has a get_balance() method
+            # 2) build a response
             resp = {
                 "type": "balance",
                 "address": address,
                 "balance": bal,
-                "height": height
+                "height": self.chain.height
             }
+            # 3) send response
             self.send_message(conn, resp)
 
-        elif mtype == "faucet":
-            # cheat block awarding coins
-            address = msg.get("address")
-            # build a new block paying address
-            # skip real PoW if you want a "faucet"
+        elif mtype == MSG_VERACK:
+            # no special action
             pass
 
-        # etc. for other message types
+        elif mtype == MSG_TX:
+            # The wallet is broadcasting a transaction
+            tx_data = msg.get("data")
+            # You'd parse it into a Transaction object, validate, add to mempool, etc.
+            logger.debug("Received new TX from %s. Data: %s", addr, tx_data)
+            # parse / validate / add to mempool
+            pass
+
+        elif mtype == MSG_BLOCK:
+            block_data = msg.get("data")
+            logger.debug("Received new block from %s. Data: %s", addr, block_data)
+            # parse / chain.add_block / broadcast if accepted
+            pass
+
+        else:
+            logger.debug("Unknown or unhandled message type: %s", mtype)
 
     def shutdown(self):
         self.stop_event.set()
         self.sock.close()
+
