@@ -2,8 +2,7 @@
 """
 p2p_node.py
 
-Implements the Node class, managing peer connections, message handling,
-block & transaction gossip, plus a "get_balance" request handler.
+Includes the "get_balance" handler.
 """
 
 import sys
@@ -18,7 +17,6 @@ from blockchain_data import Block, Transaction
 from chain_state import Chain, Mempool
 from constants import (
     MSG_VERSION, MSG_VERACK, MSG_TX, MSG_BLOCK,
-    # You might have other constants like MSG_GETBALANCE, etc.
 )
 from config import (
     NETWORK_MAGIC,
@@ -31,35 +29,25 @@ from crypto_utils import double_sha256
 logger = logging.getLogger("MattCoinNode")
 
 def serialize_msg(obj: dict) -> bytes:
-    """
-    Convert a Python dict into a length-prefixed message with NETWORK_MAGIC.
-    """
     data = json.dumps(obj).encode('utf-8')
     length = len(data).to_bytes(4, 'big')
     return NETWORK_MAGIC + length + data
 
 def deserialize_msg(sock) -> Optional[dict]:
-    """
-    Read a single message from 'sock'. Return the dict or None if error.
-    """
     try:
-        # 1) read the magic
         header = sock.recv(len(NETWORK_MAGIC))
         if header != NETWORK_MAGIC:
             return None
-        # 2) read the length
         length_bytes = sock.recv(4)
         if len(length_bytes) < 4:
             return None
         length = int.from_bytes(length_bytes, 'big')
-        # 3) read the payload
         data = b''
         while len(data) < length:
             chunk = sock.recv(length - len(data))
             if not chunk:
                 return None
             data += chunk
-        # 4) parse JSON
         return json.loads(data.decode('utf-8'))
     except:
         return None
@@ -80,13 +68,11 @@ class Node:
         self.sock.listen(8)
         self.stop_event = threading.Event()
 
-        # start listening thread
         threading.Thread(target=self.server_loop, daemon=True).start()
 
-        # try connecting to seed nodes
+        # Connect to seeds
         for s in SEED_NODES:
             self.peers.add(s)
-
         threading.Thread(target=self.connect_loop, daemon=True).start()
         threading.Thread(target=self.peer_gossip_loop, daemon=True).start()
 
@@ -108,12 +94,10 @@ class Node:
         conn.close()
 
     def connect_loop(self):
-        # periodical connect to known peers
         while not self.stop_event.is_set():
             for peer in list(self.peers):
                 host, port = peer
                 try:
-                    # say hello (version handshake)
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     s.settimeout(3)
                     s.connect((host, port))
@@ -130,8 +114,8 @@ class Node:
             time.sleep(30)
 
     def peer_gossip_loop(self):
-        # gossip mempool or blocks to peers, etc. (Not implemented here)
         while not self.stop_event.is_set():
+            # placeholder
             time.sleep(15)
 
     def send_message(self, conn, obj: dict):
@@ -154,46 +138,38 @@ class Node:
         logger.debug("handle_message: got type=%s from %s", mtype, addr)
 
         if mtype == MSG_VERSION:
-            # handshake
             their_port = msg.get("port", None)
             if their_port is not None:
                 self.peers.add((addr[0], their_port))
-            # respond with VERACK
             verack_msg = {"type": MSG_VERACK}
             self.send_message(conn, verack_msg)
 
         elif mtype == "get_balance":
-            # The GUI wallet's message
             address = msg.get("address")
             logger.debug("Received get_balance for address=%s", address)
-            # 1) fetch balance from chain's UTXO set
-            bal = self.chain.get_balance(address)  # chain_state.py has a get_balance() method
-            # 2) build a response
+            bal = self.chain.get_balance(address)
             resp = {
                 "type": "balance",
                 "address": address,
                 "balance": bal,
                 "height": self.chain.height
             }
-            # 3) send response
             self.send_message(conn, resp)
 
         elif mtype == MSG_VERACK:
-            # no special action
             pass
 
         elif mtype == MSG_TX:
-            # The wallet is broadcasting a transaction
             tx_data = msg.get("data")
-            # You'd parse it into a Transaction object, validate, add to mempool, etc.
             logger.debug("Received new TX from %s. Data: %s", addr, tx_data)
-            # parse / validate / add to mempool
+            # parse -> validate -> mempool
+            # You need code to reconstruct the Transaction object, do self.mempool.add_transaction(...).
             pass
 
         elif mtype == MSG_BLOCK:
             block_data = msg.get("data")
             logger.debug("Received new block from %s. Data: %s", addr, block_data)
-            # parse / chain.add_block / broadcast if accepted
+            # parse -> chain.add_block -> if accepted, broadcast
             pass
 
         else:
@@ -202,4 +178,3 @@ class Node:
     def shutdown(self):
         self.stop_event.set()
         self.sock.close()
-
