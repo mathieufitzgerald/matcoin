@@ -2,67 +2,36 @@
 """
 config.py
 
-Global configuration parameters and toggles.
+Global configuration parameters for our P2P node, chain, etc.
 """
 
-#####################
-# Network / P2P
-#####################
+# This is our "network magic" prefix for messages:
+NETWORK_MAGIC = b"MATTCOIN"
 
-# Magic bytes for identifying messages on our network:
-NETWORK_MAGIC = b"MATCOIN"
-
-# Protocol version:
+# Protocol version & user agent string, just for demonstration.
 PROTOCOL_VERSION = 70015
+USER_AGENT = "/MattCoin:0.1/"
 
-# User agent string (like /Satoshi:0.1/):
-USER_AGENT = "/MatCoin:0.1/"
-
-# Default port for mainnet (just an example):
-DEFAULT_PORT = 5005
-
-# Hardcoded seed nodes (host, port):
+# Hardcoded seeds (host, port)
 SEED_NODES = [
-    ("127.0.0.1", 5005),
-    # Add more seeds for real usage
+    # You can add more as needed
+    ("127.0.0.1", 5000),
 ]
 
-#####################
-# Blockchain
-#####################
-
-# "PoW" difficulty target for demonstration. In real Bitcoin this is adjusted every block set.
-# We'll keep it fairly easy so CPU mining won't take centuries:
+# For our toy PoW, let's set the difficulty fairly low so CPU mining is feasible.
+# We'll require block_hash <= this target:
 INITIAL_DIFFICULTY = 0x00000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 
-# Halving interval for block rewards:
-HALVING_INTERVAL = 210000  # Real Bitcoin uses 210,000 blocks
-
-# Target time for each block (seconds). Real Bitcoin uses ~10 minutes = 600s
-BLOCK_TARGET_TIME = 120  # 2 minutes, for demonstration
-
-# Adjust difficulty every X blocks:
-DIFFICULTY_ADJUST_INTERVAL = 2016  # Real Bitcoin = 2016
-
-# Max block size (very simplified):
-MAX_BLOCK_SIZE = 1_000_000  # 1 MB
-
-# Genesis block parameters (we'll define a message or script in the coinbase):
+# Our "genesis" coinbase message:
 GENESIS_COINBASE_SCRIPT = "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks"
 
-#####################
-# Economics
-#####################
+# Initial block reward (50 MAT in satoshi-like units):
+INITIAL_BLOCK_REWARD = 50_0000_0000
 
-# Initial block reward:
-INITIAL_BLOCK_REWARD = 50_0000_0000  # 50 MAT in "satoshi" units if 1 MAT=1e8
+# Halving interval (like Bitcoin’s 210000, but you can lower for tests):
+HALVING_INTERVAL = 210000
 
-#####################
-# Mempool / Fees
-#####################
+# For a real system, Bitcoin uses 10-min intervals and adjusts difficulty every 2016 blocks.
+# We omit that complexity here or do it minimally if you want.
 
-# Default minimum fee rate in sat/KB (very naive):
-MIN_TX_FEE_RATE = 1000
-
-# Mempool max size in bytes:
-MAX_MEMPOOL_SIZE = 300_000_000  # 300 MB, demonstration
+BLOCK_TARGET_TIME = 600  # 10 minutes for demonstration (not heavily used in this minimal code).
